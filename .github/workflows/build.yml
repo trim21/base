@@ -1,10 +1,7 @@
 name: build
 
 on:
-  workflow_call:
-    secrets:
-      CODECOV_TOKEN:
-        required: false
+  push:
 
 env:
   OWNER: ${{ github.repository_owner }}
@@ -40,89 +37,6 @@ jobs:
         id: init
         run: echo "uid=$(uuidgen)" >> ${GITHUB_OUTPUT}
 
-  lint:
-    runs-on: ubuntu-22.04
-    needs: setup
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      checks: write
-
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          show-progress: false
-
-      - name: 📥 Setup Node.js
-        uses: ./.github/actions/setup-node
-
-      - name: lint
-        run: |
-          pnpm eslint -f gha
-          pnpm prettier
-          pnpm lint:types
-
-      - name: shellcheck
-        if: ${{ github.event_name != 'merge_group' }}
-        uses: reviewdog/action-shellcheck@6e0e63d1750d02d761b3df0f2c5ba9f9ac4a9ed7 # v1.29.0
-        with:
-          fail_on_error: true
-          reporter: github-pr-annotations
-          filter_mode: nofilter
-          path: |
-            src
-            .husky
-          pattern: |
-            *.sh
-            *.bats
-          check_all_files_with_shebangs: 'true'
-
-  bats:
-    runs-on: ubuntu-22.04
-    needs: setup
-    timeout-minutes: 15
-
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          show-progress: false
-
-      - name: Install ubuntu dependencies
-        run: |
-          sudo apt-get -qq update
-          sudo apt-get -qq install -y libarchive-tools
-
-      - name: 📥 Setup Node.js
-        uses: ./.github/actions/setup-node
-
-      - name: build
-        run: pnpm build
-
-      - name: bats
-        run: pnpm test:bats
-
-  vitest:
-    runs-on: ubuntu-22.04
-    needs: setup
-    timeout-minutes: 15
-
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          show-progress: false
-
-      - name: 📥 Setup Node.js
-        uses: ./.github/actions/setup-node
-
-      - name: vitest
-        run: pnpm test:vitest
-
-      - name: Codecov
-        if: github.event_name != 'merge_group'
-        uses: codecov/codecov-action@13ce06bfc6bbe3ecf90edbbf1bc32fe5978ca1d3 # v5.3.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-
   build:
     runs-on: ubuntu-22.04
     needs: setup
@@ -146,68 +60,9 @@ jobs:
           path: |
             dist/
 
-  base:
-    runs-on: ${{ matrix.arch.os }}
-    name: base (${{ matrix.arch.name }})
-    needs:
-      - setup
-      - build
-    timeout-minutes: 15
-
-    strategy:
-      fail-fast: false
-      matrix:
-        arch:
-          - name: x86_64
-            os: ubuntu-22.04
-            tag: amd64
-          - name: aarch64
-            os: ubuntu-22.04-arm
-            tag: arm64
-
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          show-progress: false
-
-      - name: Check system
-        uses: ./.github/actions/check
-
-      - name: ⚙️ Init
-        run: |
-          echo "OWNER=${OWNER,,}" >> ${GITHUB_ENV}
-          echo "BASE=ttl.sh/${{ needs.setup.outputs.uid }}/${{ matrix.arch.tag }}:1d" >> ${GITHUB_ENV}
-
-      - name: 📥 Setup Node.js
-        uses: ./.github/actions/setup-node
-
-      - name: prepare apt proxy
-        uses: ./.github/actions/prepare-proxy
-
-      - name: fetch dist
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
-        with:
-          name: dist
-          path: dist
-
-      - name: fix executable
-        run: |
-          chmod +x dist/cli/*
-          chmod +x dist/docker/usr/local/containerbase/bin/*
-          chmod +x dist/docker/usr/local/sbin/*
-
-      - name: test distro
-        run: docker buildx bake --set build-ttl.tags=${{env.BASE}} build-ttl
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # CONTAINERBASE_CDN: ${{ vars.CONTAINERBASE_CDN }}
-
   distro:
     runs-on: ubuntu-22.04
     needs:
-      - bats
-      - lint
-      - vitest
       - build
     timeout-minutes: 30
 
@@ -258,81 +113,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # CONTAINERBASE_CDN: ${{ vars.CONTAINERBASE_CDN }}
 
-  lang:
-    runs-on: ${{ matrix.arch.os }}
-    name: ${{ matrix.tag }} (${{ matrix.arch.name }})
-    needs:
-      - setup
-      - base
-      - bats
-      - lint
-      - vitest
-    timeout-minutes: 15
-
-    strategy:
-      max-parallel: 10
-      fail-fast: false
-      matrix:
-        tag:
-          - dart
-          - dotnet
-          - erlang
-          - flutter
-          - flux
-          - golang
-          - java
-          - jb
-          - helm
-          - nix
-          - node
-          - php
-          - powershell
-          - python
-          - ruby
-          - rust
-          - swift
-          - latest
-        arch:
-          - name: x86_64
-            os: ubuntu-22.04
-            tag: amd64
-          - name: aarch64
-            os: ubuntu-22.04-arm
-            tag: arm64
-
-    env:
-      TAG: ${{ matrix.tag }}
-
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          show-progress: false
-
-      - name: Check system
-        uses: ./.github/actions/check
-
-      - name: ⚙️ Init
-        run: |
-          echo "OWNER=${OWNER,,}" >> ${GITHUB_ENV}
-          echo "BASE_IMAGE=ttl.sh/${{ needs.setup.outputs.uid }}/${{ matrix.arch.tag }}:1d" >> ${GITHUB_ENV}
-
-      - name: 📥 Setup Node.js
-        uses: ./.github/actions/setup-node
-
-      - name: prepare apt proxy
-        uses: ./.github/actions/prepare-proxy
-
-      - name: test
-        run: docker buildx bake test-${{ matrix.arch.name }} --set settings.secrets=type=env,id=GITHUB_TOKEN
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # CONTAINERBASE_CDN: ${{ vars.CONTAINERBASE_CDN }}
-
   # Catch-all required check for test matrix
   test-success:
     needs:
       - distro
-      - lang
     runs-on: ubuntu-22.04
     timeout-minutes: 1
     if: always()
